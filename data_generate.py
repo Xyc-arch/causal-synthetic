@@ -50,14 +50,16 @@ def generate_dataset(n, seed=42, rct=False, truth=False):
     print("Count of Y=0:", (data['Y'] == 0).sum())
     
     if truth:
-        return ate, np.mean(pY1), np.mean(pY0)
+        return data, ate, np.mean(pY1), np.mean(pY0)
     else:
         return data
 
 
 if __name__ == '__main__':
     
-    ate_true, y1_truth, y0_truth = generate_dataset(50000, truth=True)
+    data_truth, ate_true, y1_truth, y0_truth = generate_dataset(50000, rct=True, truth=True)
+    data_truth.drop(['pA', 'pY'], axis=1).to_csv("data_truth.csv", index=False)
+    
     print("Theoretical ATE:", ate_true)
     print("Theoretical E[Y(1)]:", y1_truth)
     print("Theoretical E[Y(0)]:", y0_truth)

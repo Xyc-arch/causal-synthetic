@@ -4,72 +4,99 @@ import pandas as pd
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier
 
+# Set random seed for reproducibility
+np.random.seed(42)
+
 def iptw(file_path, data_path=""):
     """
-    IPTW ATE estimator using random forest for propensity score estimation.
+    Standard IPTW ATE estimator using Random Forest for PS estimation.
     Expects CSV with columns: W1, W2, W3, W4, W5, W6, A, Y.
+    PS are clipped to avoid division by zero.
     """
     data = pd.read_csv(data_path + file_path)
-    # Ensure that Y and A are binary (or rounded) values
     data["Y"] = data["Y"].round()
     data["A"] = data["A"].round()
     covariates = ['W1', 'W2', 'W3', 'W4', 'W5', 'W6']
     
-    # Estimate propensity scores using Random Forest
     rf = RandomForestClassifier(random_state=42)
     rf.fit(data[covariates], data['A'])
-    data['ps'] = rf.predict_proba(data[covariates])[:, 1]
+    # Clip PS to avoid exactly 0 or 1
+    data['ps'] = np.clip(rf.predict_proba(data[covariates])[:, 1], 1e-6, 1 - 1e-6)
     
-    # Compute IPTW weights (if ps is 0 or 1 this could be unstable)
+    # Compute IPTW weights
     data['w'] = np.where(data['A'] == 1, 1 / data['ps'], 1 / (1 - data['ps']))
     
-    # Compute weighted outcomes for treated (y1) and control (y0)
+    # Compute weighted outcomes for treated and control groups
     treated = data[data['A'] == 1]
     control = data[data['A'] == 0]
-    
     y1 = np.sum(treated['Y'] * treated['w']) / np.sum(treated['w'])
     y0 = np.sum(control['Y'] * control['w']) / np.sum(control['w'])
     
     ate = y1 - y0
-    print(f"{data_path + file_path}:")
-    print("  Weighted Y for treated:", y1)
-    print("  Weighted Y for control:", y0)
-    print("  Estimated ATE:", ate)
+    print(f"{data_path + file_path}: Estimated ATE = {ate}")
+    return ate
+
+def iptw_truncated(file_path, data_path=""):
+    """
+    Baseline estimator mitigating positivity issues by truncating IPTW weights.
+    Applied only to ('data.csv', "").
+    Truncates weights to a maximum of 10.
+    """
+    data = pd.read_csv(data_path + file_path)
+    covariates = ['W1', 'W2', 'W3', 'W4', 'W5', 'W6']
+    
+    rf = RandomForestClassifier(random_state=42)
+    rf.fit(data[covariates], data['A'])
+    # data['ps'] = np.clip(rf.predict_proba(data[covariates])[:, 1], 1e-6, 1 - 1e-6)
+    data['ps'] = rf.predict_proba(data[covariates])[:, 1]
+    
+    data['w'] = np.where(data['A'] == 1, 1 / data['ps'], 1 / (1 - data['ps']))
+    data['w'] = np.where(data['w'] > 10, 10, data['w'])
+    
+    treated = data[data['A'] == 1]
+    control = data[data['A'] == 0]
+    y1 = np.sum(treated['Y'] * treated['w']) / np.sum(treated['w'])
+    y0 = np.sum(control['Y'] * control['w']) / np.sum(control['w'])
+    
+    ate = y1 - y0
+    print(f"{data_path + file_path} (truncated): Estimated ATE = {ate}")
     return ate
 
 if __name__ == '__main__':
     gens = {0: "llm", 1: "gan"}
-    # Choose paths for each generator
     gen_llm = gens[0]
     gen_gan = gens[1]
     
     parent_path_llm = f"./{gen_llm}_data/"
     parent_path_gan = f"./{gen_gan}_data/"
     
-    # Define the list of training files with appropriate paths.
-    # Files without an explicit path will be assumed to be in the current directory.
+    # Define file list; files without an explicit path are in the current directory.
     file_list = [
-        ('data_seed.csv', ""),                   # file in current directory
-        ('data.csv', ""),                        # file in current directory
-        ('syn_full.csv', parent_path_llm),         # LLM files
+        ('data_seed.csv', ""),
+        ('data.csv', ""),
+        ('syn_full.csv', parent_path_llm),
         ('syn_hybrid.csv', parent_path_llm),
         ('pair.csv', parent_path_llm),
-        ('syn_full.csv', parent_path_gan),         # LLM files
+        ('syn_full.csv', parent_path_gan),
         ('syn_hybrid.csv', parent_path_gan),
         ('pair.csv', parent_path_gan)
     ]
     
-    # Evaluate IPTW ATE for each file and store the results in a dictionary
     results = {}
+    # Compute standard IPTW ATE for each file
     for file_name, path in file_list:
-        results[path + file_name] = iptw(file_name, data_path=path)
+        full_key = path + file_name
+        results[full_key] = iptw(file_name, data_path=path)
     
-    # Create output directory if it doesn't exist
+    # Add baseline using truncated weights for 'data.csv' as a separate baseline
+    truncated_key = "truncated.csv"
+    results[truncated_key] = iptw_truncated('data.csv', data_path="")
+    
+    # Save all baseline results together in one JSON file
     results_dir = "results"
     os.makedirs(results_dir, exist_ok=True)
-    
     output_path = os.path.join(results_dir, "iptw.json")
     with open(output_path, "w") as f:
         json.dump(results, f, indent=4)
     
-    print(f"\nIPTW ATE results saved to {output_path}")
+    print(f"\nIPTW ATE results (including truncated baseline) saved to {output_path}")
